@@ -29,6 +29,12 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, pipeline
 
+def check_gpu_memory():
+    device = torch.device('cuda:0')
+    free, total = torch.cuda.mem_get_info(device)
+    mem_used_MB = (total - free) / 1024 ** 2
+    print(mem_used_MB)
+
 @dataclass
 class DPODataCollatorWithPadding:
     r"""
@@ -82,6 +88,8 @@ class DPODataCollatorWithPadding:
 
     def resample(self, step):        
         
+        print("Memory before resample: {}", check_gpu_memory())
+
         self.last_sampled_step = step
 
         # iterate over the train_dataset and update the cache
@@ -122,6 +130,8 @@ class DPODataCollatorWithPadding:
                 pad_token_id=self.tokenizer.unk_token_id
             )
 
+            print("Memory after generations: {}", check_gpu_memory())
+
             rejected = []
 
             for outs in tqdm(pipe_result, total=len(inference_dataset)):
@@ -150,6 +160,8 @@ class DPODataCollatorWithPadding:
 
                     self.cache[step][feature["prompt"]].append(rejected[ix])
                     ix += 1
+
+            print("Memory after resample: {}", check_gpu_memory())
         
         self.model.train()
         
@@ -420,6 +432,8 @@ class DPODataCollatorWithPadding:
             tokenized_batch.append(batch_element)
         
         collated = self.collate(tokenized_batch)
+
+        print("Step memory usage: {}", check_gpu_memory())
         
         return collated
 
