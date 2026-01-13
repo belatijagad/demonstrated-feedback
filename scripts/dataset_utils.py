@@ -33,7 +33,7 @@ def check_gpu_memory():
     device = torch.device('cuda:0')
     free, total = torch.cuda.mem_get_info(device)
     mem_used_MB = (total - free) / 1024 ** 2
-    print(mem_used_MB)
+    return mem_used_MB
 
 @dataclass
 class DPODataCollatorWithPadding:
