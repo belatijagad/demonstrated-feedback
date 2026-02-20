@@ -12,41 +12,33 @@ Language models are aligned to emulate the collective voice of many, resulting i
 
 We build on [alignment-handbook repo](https://github.com/huggingface/alignment-handbook). Here are the steps to get set up!
 
-First, create a Python virtual environment using e.g. Conda:
-```shell
-conda create -n ditto python=3.10 && conda activate ditto
-```
-
-Next, install PyTorch `v2.1.2`. We used the following.
+First, install [uv](https://docs.astral.sh/uv/) if you don't have it already:
 
 ```shell
-conda install pytorch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 pytorch-cuda=12.1 -c pytorch -c nvidia
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then, install the alignment handbook dependencies.
+Then, install the project dependencies (includes PyTorch with CUDA 12.1 by default):
 
 ```shell
-git clone https://github.com/huggingface/alignment-handbook.git
-cd ./alignment-handbook/
-git checkout 606d2e954fd17999af40e6fb4f712055ca11b2f0
-python -m pip install .
+uv sync
 ```
 
-Lastly, install the requirements for this repo to avoid errors due to updates in packages. 
+For CPU-only systems, use:
 
-```shell 
-pip install -r requirements.txt
+```shell
+uv sync --extra cpu
 ```
 
 A sample shell script with training + generation is in run.sh (trains Mistral Instruct v0.2 7B). Right now, it's set to finetune on email examples. The shell script has an argument for trying different datasets in the paper. Note that you may need to change the config files for your specific hardware or dataset.
 
-```shell 
-bash run.sh
+```shell
+uv run bash run.sh
 ```
 
 ### Debugging
 
-* `AttributeError: 'DittoConfig' object has no attribute 'packing'`: revert to older version of trl (`trl==0.8.6`) in `requirements.txt`. 
+* `AttributeError: 'DittoConfig' object has no attribute 'packing'`: ensure you're using `trl==0.8.6` (already pinned in `pyproject.toml`).
 
 
 ### *How do I cite this work?* 
