@@ -24,12 +24,6 @@ Then, install the project dependencies (includes PyTorch with CUDA 12.1 by defau
 uv sync
 ```
 
-For CPU-only systems, use:
-
-```shell
-uv sync --extra cpu
-```
-
 A sample shell script with training + generation is in run.sh (trains Mistral Instruct v0.2 7B). Right now, it's set to finetune on email examples. The shell script has an argument for trying different datasets in the paper. Note that you may need to change the config files for your specific hardware or dataset.
 
 ```shell
