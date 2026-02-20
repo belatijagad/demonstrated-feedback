@@ -16,7 +16,6 @@
 import logging
 import random
 import sys
-import pickle
 
 import torch
 import transformers
@@ -40,7 +39,7 @@ from alignment.data import (
 
 from peft import get_peft_model, LoraConfig, TaskType
 from dataclasses import dataclass, field
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, load_dataset
 from typing import Optional, Literal
 
 from scripts.sft_trainer import FixedSFTTrainer
@@ -125,7 +124,13 @@ class DittoConfig(DPOConfig):
     train_instances: Optional[int] = field(
         default=None
     )
-    train_pkl: str = field(
+    dataset_name_or_path: str = field(
+        default=None
+    )
+    author_id: Optional[int] = field(
+        default=None
+    )
+    train_samples_per_author: Optional[int] = field(
         default=None
     )
 
@@ -222,39 +227,56 @@ def main():
     ###############
     # Load datasets
     ###############
-    raw_dict = {}
-    for dataset_key, path in [("train", training_args.train_pkl)]:
-        
-        prefs = {
-            "prompt": [],
-            "chosen": [],
-        }
-        
-        with open(path, 'rb') as pickle_file:
-            data = pickle.load(pickle_file)
-        
-        spec_dataset = data[int(training_args.train_author_key)]    
+    def load_author_subset(training_args):
+        """Load and trim the dataset to the configured author/sample count."""
+        raw_dataset = (
+            load_dataset(training_args.dataset_name_or_path)["train"]
+            .filter(lambda x: x["author_id"] == training_args.author_id)
+            .shuffle(seed=training_args.seed)
+        )
 
-        if training_args.train_instances:
-            spec_dataset = spec_dataset[:int(training_args.train_instances)]
-        
-        for item in spec_dataset:
+        limit = training_args.train_samples_per_author
+
+        if limit is None or limit < 1:
+            logger.info(f"Using all available samples ({len(raw_dataset)}) for author {training_args.author_id}")
+            return raw_dataset
+
+        num_samples = min(limit, len(raw_dataset))
+        logger.info(f"Subsampling {num_samples} samples for author {training_args.author_id}")
+        return raw_dataset.select(range(num_samples))
+
+    raw_dataset = load_author_subset(training_args)
+    
+    # Build dataset in the format expected by the training pipeline
+    # Convert from string format to OpenAI message format
+    prefs = {
+        "prompt": [],
+        "chosen": [],
+    }
+    
+    for item in raw_dataset:
+        # Check if chosen is already in OpenAI format (list of dicts) or string
+        chosen_data = item["chosen"]
+        if isinstance(chosen_data, str):
+            # Convert string format to OpenAI message format
             prefs["prompt"].append(item["prompt"])
-
             prefs["chosen"].append([
                 {
                     "content": item["prompt"],
                     "role": "user"
                 },
                 {
-                    "content": item["output"].strip(),
+                    "content": chosen_data.strip(),
                     "role": "assistant"
                 }
             ])
-            
-        raw_dict[dataset_key] = Dataset.from_dict(prefs)
-    
-    raw_datasets = DatasetDict(raw_dict)
+        else:
+            # Already in OpenAI format
+            prefs["prompt"].append(item["prompt"])
+            prefs["chosen"].append(chosen_data)
+
+    train_dataset = Dataset.from_dict(prefs)
+    raw_datasets = DatasetDict({"train": train_dataset})
     column_names = list(raw_datasets["train"].features)
 
     #####################################

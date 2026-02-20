@@ -20,6 +20,8 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
+from scripts.estimator import BaseEstimator
+
 
 def generate_model_outputs(
     prompts: list[str],
@@ -133,6 +135,11 @@ class DPODataCollatorWithPadding:
     cache = {}
 
     last_sampled_step: int = 0
+    
+    # Estimator support
+    estimator: Optional[BaseEstimator] = None
+    higher_is_better: bool = True
+    rejection_thresh: float = 0.0
 
     def resample(self, step):        
         
@@ -188,6 +195,10 @@ class DPODataCollatorWithPadding:
 
                 for result in prompt_to_results[prompt]:
                     gen_text = result["text"]
+                    gen_ids = result["gen_ids"]
+                    transition_scores = result["transition_scores"]
+                    logits = result["logits"]
+                    
                     gen_tokens = len(
                         self.tokenizer(
                             gen_text, 
@@ -195,18 +206,34 @@ class DPODataCollatorWithPadding:
                         )["input_ids"]
                     )
 
+                    # Compute estimator score if estimator is provided
+                    if self.estimator is not None:
+                        score = self.estimator(
+                            input_ids=gen_ids,
+                            logprobs=transition_scores,
+                            logits=logits,
+                        )
+                        if isinstance(score, torch.Tensor):
+                            score = score.item()
+                    else:
+                        score = 0.0
+
                     if gen_tokens >= max_gen_tokens - 1:
                         # BAD LANGUAGE MODEL!! NO EOS TOKEN FOR YOU!
                         self.cache[step][prompt].append({
                             "text": gen_text,
-                            "transition_scores": result["transition_scores"],
-                            "logits": result["logits"],
+                            "score": score,
+                            "transition_scores": transition_scores,
+                            "logits": logits,
+                            "gen_ids": gen_ids,
                         })
                     else:
                         self.cache[step][prompt].append({
                             "text": gen_text + " " + self.tokenizer.eos_token,
-                            "transition_scores": result["transition_scores"],
-                            "logits": result["logits"],
+                            "score": score,
+                            "transition_scores": transition_scores,
+                            "logits": logits,
+                            "gen_ids": gen_ids,
                         })
 
             print("Memory after resample: {}", check_gpu_memory())
@@ -410,24 +437,45 @@ class DPODataCollatorWithPadding:
             chosen = feature["chosen"]
             
             curr_batch[prompt]["replay"] = []
+            curr_batch[prompt]["noisy"] = []
             
             for step_a in range(self.last_sampled_step, -1, -1):
-                curr_batch[feature["prompt"]][step_a] = []
 
                 # skip if we never sampled here
                 if step_a not in self.cache: continue 
 
-                # inter-batch
+                # inter-batch: use scores to select noisy pairs
                 for step_b in range(step_a - 1, -1, -1):
 
                     # skip if we never sampled here
                     if step_b not in self.cache: continue   
                     
-                    for rejected_a in self.cache[step_a][prompt]:    
-                        for rejected_b in self.cache[step_b][prompt]:
-                            curr_batch[prompt][step_a].append(
-                                (prompt, rejected_a["text"], rejected_b["text"])
-                            )                      
+                    for curr_result in self.cache[step_a][prompt]:    
+                        for past_result in self.cache[step_b][prompt]:
+                            curr_score = curr_result["score"]
+                            past_score = past_result["score"]
+                            
+                            # Only create noisy pairs if score difference exceeds threshold
+                            if abs(curr_score - past_score) >= self.rejection_thresh:
+                                # Determine which is chosen vs rejected based on scores
+                                if self.higher_is_better:
+                                    if past_score > curr_score:
+                                        chosen_text = past_result["text"]
+                                        rejected_text = curr_result["text"]
+                                    else:
+                                        chosen_text = curr_result["text"]
+                                        rejected_text = past_result["text"]
+                                else:
+                                    if past_score < curr_score:
+                                        chosen_text = past_result["text"]
+                                        rejected_text = curr_result["text"]
+                                    else:
+                                        chosen_text = curr_result["text"]
+                                        rejected_text = past_result["text"]
+                                
+                                curr_batch[prompt]["noisy"].append(
+                                    (prompt, chosen_text, rejected_text)
+                                )                    
 
                 # replay buffer
                 if step_a < self.last_sampled_step:
@@ -459,8 +507,8 @@ class DPODataCollatorWithPadding:
                 if iteration == "expert":
                     expert_samples = expert_samples + curr_batch[feature][iteration]
                 elif iteration == "replay":
-                    replay_samples = replay_samples + curr_batch[feature][iteration]                    
-                else:
+                    replay_samples = replay_samples + curr_batch[feature][iteration]                   
+                elif iteration == "noisy":
                     noisy_samples = noisy_samples + curr_batch[feature][iteration]
         
         len_superbatch = len(curr_batch) * self.rescale_batch
