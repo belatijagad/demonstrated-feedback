@@ -16,7 +16,6 @@
 import logging
 import random
 import sys
-import pdb
 import pickle
 
 import torch
@@ -24,7 +23,7 @@ import transformers
 from transformers import AutoModelForCausalLM, set_seed
 
 from peft.utils import ModulesToSaveWrapper
-from peft.tuners.tuners_utils import BaseTuner, BaseTunerLayer
+from peft.tuners.tuners_utils import BaseTunerLayer
 
 from alignment import (
     DataArguments,
@@ -32,30 +31,20 @@ from alignment import (
     H4ArgumentParser,
     ModelArguments,
     get_checkpoint,
-    get_datasets,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
     get_tokenizer,
-    is_adapter_model,
 )
 
 from alignment.data import (
-    maybe_insert_system_message,
     is_openai_format
 )
 
-from peft import PeftConfig, PeftModel, get_peft_model, LoraConfig, TaskType
+from peft import get_peft_model, LoraConfig, TaskType
 from dataclasses import dataclass, field
 from datasets import Dataset, DatasetDict
 from typing import Optional, Literal
 
-from trl import DataCollatorForCompletionOnlyLM
 from scripts.sft_trainer import FixedSFTTrainer
 from scripts.ditto_trainer import DITTOTrainer
-
-import warnings
-import numpy as np
 
 from transformers.trainer_callback import TrainerCallback
 
@@ -81,8 +70,6 @@ class EarlyStoppingCallback(TrainerCallback):
 logger = logging.getLogger(__name__)
 
 MISTRAL_CHAT_TEMPLATE = "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'].strip() + '\n\n' %}{% else %}{% set loop_messages = messages %}{% set system_message = '' %}{% endif %}{% for message in loop_messages %}{% if loop.index0 == 0 %}{% set content = system_message + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"
-
-from typing import Callable, Dict, List, Optional, Tuple, Union, Any
 
 @dataclass
 class DittoConfig(DPOConfig):
@@ -318,7 +305,6 @@ def main():
     torch_dtype = (
         model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
     )
-    quantization_config = get_quantization_config(model_args)
     
     model_kwargs = dict(
         revision=model_args.base_model_revision,
