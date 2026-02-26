@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export HF_API=""
+export HF_TOKEN=""
 
 SEED=42
 seed_file="/tmp/seed_$SEED"
