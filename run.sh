@@ -23,7 +23,7 @@ for num in $selected_numbers; do
         --output_dir=outputs/${benchmark}-mistral-7b-instruct-ditto-key-$num \
         --train_instances=7 \
         --push_to_hub=true \
-        --hub_repo_id=mistralai/Mistral-7B-Instruct-v0.2-ditto-key-$num 
+        --hub_repo_id=mistralai/Mistral-7B-Instruct-v0.2-ditto-key-$num
 done
 
 rm "$seed_file"
