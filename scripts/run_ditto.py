@@ -35,30 +35,12 @@ from peft import get_peft_model, LoraConfig, TaskType
 from dataclasses import dataclass, field
 from typing import Optional
 
+from trl import DPOTrainer
+
 from scripts.sft_trainer import FixedSFTTrainer
-from scripts.ditto_trainer import DITTOTrainer
 from scripts.utils import load_dataset, apply_chat_template, copy_adapter_weights
-
-from transformers.trainer_callback import TrainerCallback
-
-class EarlyStoppingCallback(TrainerCallback):
-    # any more training, and this overfits on train.
-    def __init__(self, threshold=1.0):
-        self.threshold = threshold
-
-    def on_step_begin(self, args, state, control, **kwargs):  
-        
-        if len(state.log_history) > 0:
-            # get last log history
-            last_loss = None
-            
-            for k in state.log_history[::-1]:
-                if "loss" in k:
-                    last_loss = k["loss"]
-                    break
-                    
-            if last_loss < self.threshold:
-                control.should_training_stop = True
+from scripts.callbacks import EarlyStoppingCallback, ResampleCallback
+from scripts.dataset_utils import DPODataCollatorWithPadding
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +119,10 @@ class DittoConfig(DPOConfig):
     )
 
     hub_repo_id: Optional[str] = field(
+        default=None,
+    )
+
+    train_pkl: Optional[str] = field(
         default=None,
     )
     
@@ -269,7 +255,7 @@ def main():
     trainer.save_model(training_args.output_dir)
 
     if training_args.push_to_hub:
-        trainer.push_to_hub(hub_model_id=training_args.hub_repo_id)
+        trainer.push_to_hub(model_name=training_args.hub_repo_id)
     
     #########################
     # Instantiate DPO trainer
@@ -285,10 +271,24 @@ def main():
     model.set_adapter("None")
 
     copy_adapter_weights("ref_model", "None", model)
-    
-    trainer = DITTOTrainer(
+
+    data_collator = DPODataCollatorWithPadding(
         model=model,
-        ref_adapter_name="ref_model", # keep the reference as the sft model.
+        tokenizer=tokenizer,
+        train_dataset=raw_datasets["train"],
+        max_length=training_args.max_length,
+        max_prompt_length=training_args.max_prompt_length,
+        
+        bootstrap_count=training_args.bootstrap_count,
+        frac_expert=training_args.frac_expert,
+        frac_noisy=training_args.frac_noisy,
+        frac_replay=training_args.frac_replay,
+        rescale_batch=training_args.rescale_batch,
+    )
+    
+    trainer = DPOTrainer(
+        model=model,
+        ref_adapter_name="ref_model",
         model_adapter_name="None",
         args=training_args,
         beta=training_args.beta,
@@ -296,7 +296,9 @@ def main():
         tokenizer=tokenizer,
         max_length=training_args.max_length,
         max_prompt_length=training_args.max_prompt_length,
-        loss_type=training_args.loss_type,  
+        data_collator=data_collator,
+        loss_type=training_args.loss_type,
+        callbacks=[ResampleCallback(data_collator, model, training_args.resample_rate)],
     )
 
     ###############
@@ -331,7 +333,7 @@ def main():
     logger.info("*** Training complete! ***")
 
     if training_args.push_to_hub:
-        trainer.push_to_hub(hub_model_id=training_args.hub_repo_id)
+        trainer.push_to_hub(model_name=training_args.hub_repo_id)
 
 if __name__ == "__main__":
     main()

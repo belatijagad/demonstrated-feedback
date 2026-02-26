@@ -7,6 +7,9 @@ from alignment.data import is_openai_format
 from peft.utils import ModulesToSaveWrapper
 from peft.tuners.tuners_utils import BaseTunerLayer
 
+from transformers import PreTrainedModel, PreTrainedTokenizerBase
+
+
 MISTRAL_CHAT_TEMPLATE = "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'].strip() + '\n\n' %}{% else %}{% set loop_messages = messages %}{% set system_message = '' %}{% endif %}{% for message in loop_messages %}{% if loop.index0 == 0 %}{% set content = system_message + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"
 
 def load_dataset(
@@ -101,3 +104,60 @@ def copy_adapter_weights(src_adapter_name, tgt_adapter_name, model):
             if src_adapter_name in model_module.lora_embedding_A.keys():
                 model_module.lora_embedding_A[tgt_adapter_name].load_state_dict(model_module.lora_embedding_A[src_adapter_name].state_dict())
                 model_module.lora_embedding_B[tgt_adapter_name].load_state_dict(model_module.lora_embedding_B[src_adapter_name].state_dict())
+
+
+def generate_model_outputs(
+    prompts: list[str],
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    *,
+    gen_kwargs: dict[str, any],
+    num_return_sequences: int = 1,
+):    
+    tokenizer.padding_side = "left"
+    
+    results = []
+
+    for prompt in prompts:
+        inputs = tokenizer(prompt, return_tensors="pt", padding=True, add_special_tokens=False).to(model.device)
+        prompt_len = inputs["input_ids"].shape[1]
+        
+        with torch.inference_mode():
+            outputs = model.generate(
+                **inputs,
+                pad_token_id=tokenizer.pad_token_id,
+                output_scores=True,
+                return_dict_in_generate=True,
+                eos_token_id=tokenizer.eos_token_id,
+                num_return_sequences=num_return_sequences,
+                **gen_kwargs,
+            )
+
+        sequences = outputs.sequences.detach().cpu()
+        scores = [s.detach().cpu() for s in outputs.scores]
+        del outputs
+
+        # With num_return_sequences > 1, sequences shape is [num_return_sequences, seq_len]
+        # since input batch size is 1
+        prompt_ids = sequences[:, :prompt_len]
+        gen_ids = sequences[:, prompt_len:]
+
+        # Reconstruct Logits [Batch, Seq_Len, Vocab]
+        logits = torch.stack(scores, dim=1) 
+        
+        trans_scores = model.compute_transition_scores(sequences, scores, normalize_logits=True)
+        
+        # Decode generated text for each sequence
+        decoded_texts = tokenizer.batch_decode(gen_ids, skip_special_tokens=False)
+        
+        # Return list of dicts, one per generated sequence
+        for i in range(num_return_sequences):
+            results.append({
+                "prompt_ids": prompt_ids[i],
+                "gen_ids": gen_ids[i],
+                "text": decoded_texts[i],
+                "transition_scores": trans_scores[i],
+                "logits": logits[i] if logits.dim() == 3 else logits,
+            })
+
+    return results

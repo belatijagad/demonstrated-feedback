@@ -14,9 +14,6 @@
 import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
-from tqdm import tqdm
-from datasets import Dataset
-from transformers.pipelines.pt_utils import KeyDataset
 
 import numpy as np
 import torch
@@ -24,64 +21,7 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 from scripts.estimator import BaseEstimator
-
-
-def generate_model_outputs(
-    prompts: list[str],
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    *,
-    gen_kwargs: dict[str, Any],
-    num_return_sequences: int = 1,
-):    
-    tokenizer.padding_side = "left"
-    
-    results = []
-
-    for prompt in prompts:
-        inputs = tokenizer(prompt, return_tensors="pt", padding=True, add_special_tokens=False).to(model.device)
-        prompt_len = inputs["input_ids"].shape[1]
-        
-        with torch.inference_mode():
-            outputs = model.generate(
-                **inputs,
-                pad_token_id=tokenizer.pad_token_id,
-                output_scores=True,
-                return_dict_in_generate=True,
-                eos_token_id=tokenizer.eos_token_id,
-                num_return_sequences=num_return_sequences,
-                **gen_kwargs,
-            )
-
-        sequences = outputs.sequences.detach().cpu()
-        scores = [s.detach().cpu() for s in outputs.scores]
-        del outputs
-
-        # With num_return_sequences > 1, sequences shape is [num_return_sequences, seq_len]
-        # since input batch size is 1
-        prompt_ids = sequences[:, :prompt_len]
-        gen_ids = sequences[:, prompt_len:]
-
-        # Reconstruct Logits [Batch, Seq_Len, Vocab]
-        logits = torch.stack(scores, dim=1) 
-        
-        trans_scores = model.compute_transition_scores(sequences, scores, normalize_logits=True)
-        
-        # Decode generated text for each sequence
-        decoded_texts = tokenizer.batch_decode(gen_ids, skip_special_tokens=False)
-        
-        # Return list of dicts, one per generated sequence
-        for i in range(num_return_sequences):
-            results.append({
-                "prompt_ids": prompt_ids[i],
-                "gen_ids": gen_ids[i],
-                "text": decoded_texts[i],
-                "transition_scores": trans_scores[i],
-                "logits": logits[i] if logits.dim() == 3 else logits,
-            })
-
-    return results
-
+from scripts.utils import generate_model_outputs
 
 def check_gpu_memory():
     device = torch.device('cuda:0')

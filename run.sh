@@ -3,11 +3,13 @@
 export HF_TOKEN=""
 
 SEED=42
+
+num_authors=4
 seed_file="/tmp/seed_$SEED"
 
 echo "$SEED" | openssl sha256 -binary > "$seed_file"
 
-selected_numbers=$(shuf -i 1-50 -n 1 --random-source="$seed_file")
+selected_numbers=$(shuf -i 1-50 -n $num_authors --random-source="$seed_file")
 
 echo "Seed: $SEED"
 echo "Selected indices: $selected_numbers"
