@@ -119,7 +119,13 @@ class DittoConfig(DPOConfig):
     train_instances: Optional[int] = field(
         default=None
     )
-    train_pkl: str = field(
+    dataset_name_or_path: str = field(
+        default=None
+    )
+    author_id: Optional[int] = field(
+        default=None
+    )
+    train_samples_per_author: Optional[int] = field(
         default=None
     )
 
