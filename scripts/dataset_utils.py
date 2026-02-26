@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import random
+from tqdm import tqdm
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from transformers import PreTrainedModel, PreTrainedTokenizerBase
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, pipeline
+
+from datasets import Dataset
+from transformers.pipelines.pt_utils import KeyDataset
 
 from scripts.estimator import BaseEstimator
-from scripts.utils import generate_model_outputs
 
 def check_gpu_memory():
     device = torch.device('cuda:0')
@@ -86,14 +89,24 @@ class DPODataCollatorWithPadding:
 
     def resample(self, step):        
         
-        print("Memory before resample: {}", check_gpu_memory())
-
         self.last_sampled_step = step
 
         # iterate over the train_dataset and update the cache
         if step not in self.cache:
             self.cache[step] = {}
         
+        # create the pipeline to sample generations for each _item_
+        if self.pipeline == None:
+            
+            self.pipeline = pipeline(
+                "text-generation", 
+                model=self.model, 
+                tokenizer=self.tokenizer,
+                device="cuda",
+                batch_size=2,
+                pad_token_id=self.tokenizer.pad_token_id
+            )
+                    
         # here, we call the model and add everything to cache:
         self.model.eval()
 
@@ -103,86 +116,49 @@ class DPODataCollatorWithPadding:
             for feature in self.train_dataset:
                 prompt_text.append(feature["prompt"])
 
+            inference_dataset = Dataset.from_dict({"prompt": prompt_text})
+
             max_gen_tokens = 1024
             
-            gen_kwargs = {
-                "max_new_tokens": max_gen_tokens,
-                "do_sample": True,
-                "temperature": 1,
-            }
-            
-            results = generate_model_outputs(
-                prompts=prompt_text,
-                model=self.model,
-                tokenizer=self.tokenizer,
-                gen_kwargs=gen_kwargs,
+            pipe_result = self.pipeline(
+                KeyDataset(inference_dataset, "prompt"), 
+                max_new_tokens=max_gen_tokens, do_sample=True, 
+                temperature=1,
                 num_return_sequences=self.bootstrap_count,
+                return_full_text=False,
+                pad_token_id=self.tokenizer.unk_token_id
             )
 
-            print("Memory after generations: {}", check_gpu_memory())
+            rejected = []
 
-            # Group results by prompt
-            prompt_to_results = {}
-            for i, prompt in enumerate(prompt_text):
-                if prompt not in prompt_to_results:
-                    prompt_to_results[prompt] = []
-                # Get results for this prompt (num_return_sequences consecutive results)
-                start_idx = i * self.bootstrap_count
-                end_idx = start_idx + self.bootstrap_count
-                prompt_to_results[prompt] = results[start_idx:end_idx]
-
-            for feature in self.train_dataset:
-                prompt = feature["prompt"]
-                if prompt not in self.cache[step]:
-                    self.cache[step][prompt] = []
-
-                for result in prompt_to_results[prompt]:
-                    gen_text = result["text"]
-                    gen_ids = result["gen_ids"]
-                    transition_scores = result["transition_scores"]
-                    logits = result["logits"]
+            for outs in tqdm(pipe_result, total=len(inference_dataset)):
+                for out in outs:
                     
                     gen_tokens = len(
                         self.tokenizer(
-                            gen_text, 
+                            out["generated_text"], 
                             add_special_tokens=False
                         )["input_ids"]
                     )
 
-                    # Compute estimator score if estimator is provided
-                    if self.estimator is not None:
-                        score = self.estimator(
-                            input_ids=gen_ids,
-                            logprobs=transition_scores,
-                            logits=logits,
-                        )
-                        if isinstance(score, torch.Tensor):
-                            score = score.item()
-                    else:
-                        score = 0.0
 
                     if gen_tokens >= max_gen_tokens - 1:
                         # BAD LANGUAGE MODEL!! NO EOS TOKEN FOR YOU!
-                        self.cache[step][prompt].append({
-                            "text": gen_text,
-                            "score": score,
-                            "transition_scores": transition_scores,
-                            "logits": logits,
-                            "gen_ids": gen_ids,
-                        })
+                        rejected.append(out["generated_text"])
                     else:
-                        self.cache[step][prompt].append({
-                            "text": gen_text + " " + self.tokenizer.eos_token,
-                            "score": score,
-                            "transition_scores": transition_scores,
-                            "logits": logits,
-                            "gen_ids": gen_ids,
-                        })
+                        rejected.append(out["generated_text"] + " " + self.tokenizer.eos_token)
+                        
+            ix = 0
+            
+            for feature in self.train_dataset:
+                for _ in range(self.bootstrap_count):
+                    if feature["prompt"] not in self.cache[step]:
+                        self.cache[step][feature["prompt"]] = []
 
-            print("Memory after resample: {}", check_gpu_memory())
+                    self.cache[step][feature["prompt"]].append(rejected[ix])
+                    ix += 1
         
-        self.model.train()
-        
+        self.model.train()        
         
     def build_tokenized_answer(self, prompt, answer):
         """
