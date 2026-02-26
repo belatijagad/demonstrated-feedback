@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export HF_API=""
+
 SEED=42
 seed_file="/tmp/seed_$SEED"
 
@@ -19,7 +21,9 @@ for num in $selected_numbers; do
         --train_pkl=benchmarks/${benchmark}/processed/${benchmark}_train.pkl \
         --train_author_key=$num \
         --output_dir=outputs/${benchmark}-mistral-7b-instruct-ditto-key-$num \
-        --train_instances=7
+        --train_instances=7 \
+        --push_to_hub=true \
+        --hub_repo_id=mistralai/Mistral-7B-Instruct-v0.2-ditto-key-$num 
 done
 
 rm "$seed_file"

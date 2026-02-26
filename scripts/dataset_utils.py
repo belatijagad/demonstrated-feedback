@@ -11,18 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 import random
-import warnings
-from collections import deque, defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
-import re
-from random import sample 
+from typing import Any, Dict, List, Optional, Union
 from tqdm import tqdm
 from datasets import Dataset
 from transformers.pipelines.pt_utils import KeyDataset
-import pdb
 
 import numpy as np
 import torch
@@ -399,8 +393,7 @@ class DPODataCollatorWithPadding:
     
         frac_expert = 0.7
         frac_replay = 0.2
-        frac_noisy = 0.1     
-        rescale_batch = 3
+        frac_noisy = 0.1
                 
         noisy_samples = []
         expert_samples = []
@@ -416,14 +409,10 @@ class DPODataCollatorWithPadding:
                 else:
                     noisy_samples = noisy_samples + curr_batch[feature][iteration]
         
-        len_superbatch = len(curr_batch) * 3
+        len_superbatch = len(curr_batch) * self.rescale_batch
         noisy_subsample = random.sample(noisy_samples, min(len(noisy_samples), round(len_superbatch * frac_noisy)))
         expert_subsample = random.sample(expert_samples, min(len(expert_samples), round(len_superbatch * frac_expert)))
         replay_subsample = random.sample(replay_samples, min(len(replay_samples), round(len_superbatch * frac_replay)))
-        
-        tot_noisy = len(noisy_subsample)
-        tot_exp = len(expert_subsample)
-        tot_replay = len(replay_subsample)
         
         sampled_batch = (expert_subsample + noisy_subsample + replay_subsample)
         

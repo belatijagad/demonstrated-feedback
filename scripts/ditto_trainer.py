@@ -21,11 +21,9 @@ from copy import deepcopy
 from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
 from torch.utils.data import DataLoader
