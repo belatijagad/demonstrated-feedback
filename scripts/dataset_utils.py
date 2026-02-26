@@ -14,6 +14,9 @@
 import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
+from tqdm import tqdm
+from datasets import Dataset
+from transformers.pipelines.pt_utils import KeyDataset
 
 import numpy as np
 import torch
@@ -495,7 +498,7 @@ class DPODataCollatorWithPadding:
     
         frac_expert = 0.7
         frac_replay = 0.2
-        frac_noisy = 0.1     
+        frac_noisy = 0.1
                 
         noisy_samples = []
         expert_samples = []
@@ -515,7 +518,7 @@ class DPODataCollatorWithPadding:
         noisy_subsample = random.sample(noisy_samples, min(len(noisy_samples), round(len_superbatch * frac_noisy)))
         expert_subsample = random.sample(expert_samples, min(len(expert_samples), round(len_superbatch * frac_expert)))
         replay_subsample = random.sample(replay_samples, min(len(replay_samples), round(len_superbatch * frac_replay)))
-                
+        
         sampled_batch = (expert_subsample + noisy_subsample + replay_subsample)
         
         for prompt, chosen, rejected in sampled_batch:

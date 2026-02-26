@@ -21,8 +21,6 @@ import torch
 import transformers
 from transformers import AutoModelForCausalLM, set_seed
 
-from peft.utils import ModulesToSaveWrapper
-from peft.tuners.tuners_utils import BaseTunerLayer
 
 from alignment import (
     DataArguments,
@@ -33,17 +31,13 @@ from alignment import (
     get_tokenizer,
 )
 
-from alignment.data import (
-    is_openai_format
-)
-
 from peft import get_peft_model, LoraConfig, TaskType
 from dataclasses import dataclass, field
-from datasets import Dataset, DatasetDict, load_dataset
-from typing import Optional, Literal
+from typing import Optional
 
 from scripts.sft_trainer import FixedSFTTrainer
 from scripts.ditto_trainer import DITTOTrainer
+from scripts.utils import load_dataset, apply_chat_template, copy_adapter_weights
 
 from transformers.trainer_callback import TrainerCallback
 
@@ -69,6 +63,7 @@ class EarlyStoppingCallback(TrainerCallback):
 logger = logging.getLogger(__name__)
 
 MISTRAL_CHAT_TEMPLATE = "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'].strip() + '\n\n' %}{% else %}{% set loop_messages = messages %}{% set system_message = '' %}{% endif %}{% for message in loop_messages %}{% if loop.index0 == 0 %}{% set content = system_message + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"
+
 
 @dataclass
 class DittoConfig(DPOConfig):
@@ -137,62 +132,15 @@ class DittoConfig(DPOConfig):
     sft_stop_loss: Optional[int] = field(
         default=1.25,
     )
-    
+    push_to_hub: Optional[bool] = field(
+        default=None,
+    )
 
-def apply_chat_template(
-    example,
-    tokenizer,
-    task: Literal["sft", "generation", "ditto"]
-):
+    hub_repo_id: Optional[str] = field(
+        default=None,
+    )
     
-    tokenizer.chat_template = MISTRAL_CHAT_TEMPLATE
-        
-    if task in ["sft", "generation"]:
-        
-        messages = example["chosen"]
             
-        example["text"] = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True if task == "generation" else False,
-        )
-        
-    elif task == "ditto":
-        if not is_openai_format(example["chosen"]):
-            raise ValueError(
-                f"Could not format example as dialogue for `{task}` task! Require OpenAI format for all messages"
-            )
-        
-        if "prompt" in example and is_openai_format(example["prompt"]):
-            prompt_messages = example["prompt"]
-            chosen_messages = example["chosen"]
-        else:
-            prompt_messages = example["chosen"][:-1]
-            chosen_messages = example["chosen"][-1:]
-
-        example["text_prompt"] = tokenizer.apply_chat_template(prompt_messages, tokenize=False)
-        example["text_chosen"] = tokenizer.apply_chat_template(chosen_messages, tokenize=False)
-        if example["text_chosen"].startswith(tokenizer.bos_token):
-            example["text_chosen"] = example["text_chosen"][len(tokenizer.bos_token):]
-
-    return example
-
-def copy_adapter_weights(src_adapter_name, tgt_adapter_name, model):
-
-    lora_modules = [module for module in model.modules() if isinstance(module, (BaseTunerLayer, ModulesToSaveWrapper))]
-
-    with torch.no_grad():
-        for model_module in lora_modules:
-    
-            if src_adapter_name in model_module.lora_A.keys():
-                model_module.lora_A[tgt_adapter_name].load_state_dict(model_module.lora_A[src_adapter_name].state_dict())
-                model_module.lora_B[tgt_adapter_name].load_state_dict(model_module.lora_B[src_adapter_name].state_dict())
-    
-            if src_adapter_name in model_module.lora_embedding_A.keys():
-                model_module.lora_embedding_A[tgt_adapter_name].load_state_dict(model_module.lora_embedding_A[src_adapter_name].state_dict())
-                model_module.lora_embedding_B[tgt_adapter_name].load_state_dict(model_module.lora_embedding_B[src_adapter_name].state_dict())
-            
-
 def main():
     parser = H4ArgumentParser((ModelArguments, DataArguments, DittoConfig))
     model_args, data_args, training_args = parser.parse()
@@ -224,59 +172,12 @@ def main():
     # Set seed for reproducibility
     set_seed(training_args.seed)
 
-    ###############
-    # Load datasets
-    ###############
-    def load_author_subset(training_args):
-        """Load and trim the dataset to the configured author/sample count."""
-        raw_dataset = (
-            load_dataset(training_args.dataset_name_or_path)["train"]
-            .filter(lambda x: x["author_id"] == training_args.author_id)
-            .shuffle(seed=training_args.seed)
-        )
-
-        limit = training_args.train_samples_per_author
-
-        if limit is None or limit < 1:
-            logger.info(f"Using all available samples ({len(raw_dataset)}) for author {training_args.author_id}")
-            return raw_dataset
-
-        num_samples = min(limit, len(raw_dataset))
-        logger.info(f"Subsampling {num_samples} samples for author {training_args.author_id}")
-        return raw_dataset.select(range(num_samples))
-
-    raw_dataset = load_author_subset(training_args)
-    
-    # Build dataset in the format expected by the training pipeline
-    # Convert from string format to OpenAI message format
-    prefs = {
-        "prompt": [],
-        "chosen": [],
-    }
-    
-    for item in raw_dataset:
-        # Check if chosen is already in OpenAI format (list of dicts) or string
-        chosen_data = item["chosen"]
-        if isinstance(chosen_data, str):
-            # Convert string format to OpenAI message format
-            prefs["prompt"].append(item["prompt"])
-            prefs["chosen"].append([
-                {
-                    "content": item["prompt"],
-                    "role": "user"
-                },
-                {
-                    "content": chosen_data.strip(),
-                    "role": "assistant"
-                }
-            ])
-        else:
-            # Already in OpenAI format
-            prefs["prompt"].append(item["prompt"])
-            prefs["chosen"].append(chosen_data)
-
-    train_dataset = Dataset.from_dict(prefs)
-    raw_datasets = DatasetDict({"train": train_dataset})
+    # Load datasets    
+    raw_datasets = load_dataset(
+        data_path=training_args.train_pkl, 
+        author_id=training_args.train_author_key, 
+        num_instances=training_args.train_instances
+    )
     column_names = list(raw_datasets["train"].features)
 
     #####################################
@@ -349,17 +250,8 @@ def main():
         task_type=TaskType.CAUSAL_LM
     )
 
-    model = get_peft_model(model, lora_config, adapter_name="sft")
-    model.set_adapter("sft")
-
-    # we think it's useful, in our setting, to model the user too-
-    # you could try uncommenting this 
-    
-    # collator = DataCollatorForCompletionOnlyLM(
-    #     # instruction_template=[733, 16289, 28793], 
-    #     response_template=[733, 28748, 16289, 28793], 
-    #     tokenizer=tokenizer, mlm=False
-    # )
+    model = get_peft_model(model, lora_config, adapter_name="ref_model")
+    model.set_adapter("ref_model")
 
     trainer = FixedSFTTrainer(
         model,
@@ -374,6 +266,10 @@ def main():
 
     # SFT Train
     trainer.train()
+    trainer.save_model(training_args.output_dir)
+
+    if training_args.push_to_hub:
+        trainer.push_to_hub(hub_model_id=training_args.hub_repo_id)
     
     #########################
     # Instantiate DPO trainer
@@ -385,15 +281,15 @@ def main():
     training_args.warmup_ratio = training_args.ditto_warmup_ratio
     training_args.per_device_train_batch_size = training_args.ditto_per_device_train_batch_size
 
-    model.add_adapter("ditto", lora_config)
-    model.set_adapter("ditto")
+    model.add_adapter("None", lora_config)
+    model.set_adapter("None")
 
-    copy_adapter_weights("sft", "ditto", model)
+    copy_adapter_weights("ref_model", "None", model)
     
     trainer = DITTOTrainer(
         model=model,
-        ref_adapter_name="sft", # keep the reference as the sft model.
-        model_adapter_name="ditto",
+        ref_adapter_name="ref_model", # keep the reference as the sft model.
+        model_adapter_name="None",
         args=training_args,
         beta=training_args.beta,
         train_dataset=raw_datasets["train"],
@@ -420,7 +316,7 @@ def main():
     # Save model and create model card
     ##################################
 
-    model.delete_adapter("sft")
+    model.delete_adapter("ref_model")
 
     logger.info("*** Save model ***")
 
@@ -433,6 +329,9 @@ def main():
         trainer.model.config.save_pretrained(training_args.output_dir)
 
     logger.info("*** Training complete! ***")
+
+    if training_args.push_to_hub:
+        trainer.push_to_hub(hub_model_id=training_args.hub_repo_id)
 
 if __name__ == "__main__":
     main()

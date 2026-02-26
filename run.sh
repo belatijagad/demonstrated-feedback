@@ -1,19 +1,29 @@
-conda activate ditto
+#!/bin/bash
 
 export HF_TOKEN=""
-export PYTHONPATH=$PYTHONPATH:.
+
+SEED=42
+seed_file="/tmp/seed_$SEED"
+
+echo "$SEED" | openssl sha256 -binary > "$seed_file"
+
+selected_numbers=$(shuf -i 1-50 -n 1 --random-source="$seed_file")
+
+echo "Seed: $SEED"
+echo "Selected indices: $selected_numbers"
 
 benchmark="ccat50"
 
-rm -rf outputs/${benchmark}-mistral-7b-instruct-ditto
+for num in $selected_numbers; do
+    echo "Running experiment for author_key: $num"
+    
+    uv run -m scripts.run_ditto configs/ditto-mistral-7b-instruct.yaml \
+        --train_pkl=benchmarks/${benchmark}/processed/${benchmark}_train.pkl \
+        --train_author_key=$num \
+        --output_dir=outputs/${benchmark}-mistral-7b-instruct-ditto-key-$num \
+        --train_instances=7 \
+        --push_to_hub=true \
+        --hub_repo_id=mistralai/Mistral-7B-Instruct-v0.2-ditto-key-$num
+done
 
-python scripts/run_ditto.py configs/ditto-mistral-7b-instruct.yaml \
-    --train_pkl=benchmarks/${benchmark}/processed/${benchmark}_train.pkl \
-    --train_author_key=0 \
-    --output_dir=outputs/${benchmark}-mistral-7b-instruct-ditto \
-    --train_instances=7
-
-# python generate.py \
-#     --benchmark=$benchmark \
-#     --train_author_key=0
-
+rm "$seed_file"
