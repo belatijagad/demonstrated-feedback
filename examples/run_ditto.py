@@ -200,10 +200,12 @@ def main():
         desc="Formatting comparisons with prompt template",
     )
 
-    # Replace column names with what TRL needs, text_chosen -> chosen and text_rejected -> rejected
     for split in ["train"]:
         raw_datasets[split] = raw_datasets[split].rename_columns(
             {"text_prompt": "prompt", "text_chosen": "chosen"}
+        )
+        raw_datasets[split] = raw_datasets[split].map(
+            lambda example: {"rejected": example["chosen"]},
         )
 
     # Log a few random samples from the training set:

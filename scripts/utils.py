@@ -6,6 +6,8 @@ from datasets import Dataset, DatasetDict
 from alignment.data import is_openai_format
 from peft.utils import ModulesToSaveWrapper
 from peft.tuners.tuners_utils import BaseTunerLayer
+import numpy as np
+import random
 
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
@@ -161,3 +163,10 @@ def generate_model_outputs(
             })
 
     return results
+
+def seed_everything(seed: int = 42) -> None:
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True

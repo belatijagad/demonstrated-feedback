@@ -32,7 +32,7 @@ def process_dataset(
     # Load and filter train data for the specific author
     train_data = (
         dataset["train"]
-        .filter(lambda x: x["author_id"] == author_id)
+        .filter(lambda x: x["author_id"] == int(author_id))
         .shuffle(seed=seed)
     )
     
@@ -45,7 +45,7 @@ def process_dataset(
     # Load and filter eval data for the specific author (no shuffle)
     eval_data = (
         dataset[target_eval_split]
-        .filter(lambda x: x["author_id"] == author_id)
+        .filter(lambda x: x["author_id"] == int(author_id))
     )
     
     assert len(eval_data) > 0, f"No rows found for author {author_id} in '{target_eval_split}' split."
@@ -67,7 +67,7 @@ def generate_examples(
 ) -> None:
     assert dataset_kwargs["eval_split"] != "train", "Doesn't support `train` split currently."
     example_dataset = dataset[dataset_kwargs["eval_split"]].to_pandas()
-    example_dataset = example_dataset.loc[example_dataset.author_id == dataset_kwargs["author_id"]]
+    example_dataset = example_dataset.loc[example_dataset.author_id == int(dataset_kwargs["author_id"])]
     os.makedirs(base_dir+"/examples", exist_ok=True)
     example_dataset.to_csv(base_dir + "/examples/" + f"{dataset_kwargs['name']}_{dataset_kwargs['author_id']}.csv", index=False)
 
@@ -158,7 +158,7 @@ def main():
     parser.add_argument("--num_train_samples", type=int, default=7, help="Number of train samples for few-shot")
     parser.add_argument("--num_eval_samples", type=int, default=3, help="Max eval samples (0 = use all)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--max_new_tokens", type=int, default=1024, help="Max new tokens to generate")
+    parser.add_argument("--max_new_tokens", type=int, default=2048, help="Max new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=True, help="Use sampling")
     parser.add_argument("--num_return_sequences", type=int, default=1, help="Number of sequences to generate per prompt")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for generation")
@@ -171,12 +171,12 @@ def main():
     model_name = args.model_name or args.model_name_or_path.split("/")[-1]
     dataset_name = args.dataset_name or args.dataset_name_or_path.split("/")[-1]
 
-    # Directory structure matching config: {dataset_name}_{author_id}_{model_name}
-    run_name = f"{dataset_name}_{args.author_id}_{model_name}"
+    # Directory structure matching config: {dataset_name}-{model_name}-{method_name}-key-{author_id}
+    run_name = f"ccat50-mistral-7b-instruct-ditto-key-{args.author_id}"
     checkpoint_dir = Path(args.checkpoint_base_dir) / run_name
     output_dir = Path(args.output_base_dir) / run_name
 
-    repo_id = f"belati/{model_name}_{dataset_name}_{args.author_id}"
+    repo_id = f"belati/ccat50-mistral-7b-instruct-ditto-key-{args.author_id}"
     use_remote_repo = repo_exists(repo_id)
 
     logger.info(f"Source: {'HuggingFace Hub (' + repo_id + ')' if use_remote_repo else 'Local Checkpoints'}")

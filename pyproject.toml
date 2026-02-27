@@ -32,6 +32,9 @@ dependencies = [
     "tqdm>=4.64.1",
     "rich",
     "python-dotenv",
+    "pandas>=2.1.0",
+    "openai>=2.24.0",
+    "google-genai>=1.65.0",
 ]
 
 [project.optional-dependencies]

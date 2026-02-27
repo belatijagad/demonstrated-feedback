@@ -26,6 +26,13 @@ for num in $selected_numbers; do
         --train_instances=7 \
         --push_to_hub=true \
         --hub_repo_id=mistralai/Mistral-7B-Instruct-v0.2-ditto-key-$num
+
+    uv run -m scripts.generate_samples \
+        -d belati/ccat50 \
+        -a $num \
+        -m mistralai/Mistral-7B-Instruct-v0.2 \
+        --model_name mistral-7b
+
 done
 
 rm "$seed_file"
