@@ -281,6 +281,7 @@ def main():
     
     logger.info("=>> Starting the evaluation process...")
     logger.info(f"Model for evaluation: {args.model_name}")
+
     data = aggregate_responses()
     create_jsonl(data, args)
     create_batch_request(args)

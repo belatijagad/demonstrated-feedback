@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import argparse
+from datetime import datetime
 from typing import Any
 from pathlib import Path
 from dotenv import load_dotenv
@@ -14,13 +15,49 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_PATH = ROOT / "outputs" / "evaluations"
+FULL_RESPONSE_DIR = OUTPUT_PATH / "full-responses"
 
 def determine_provider(model_name: str) -> str:
     if "gpt" in model_name:
         return "openai"
     return "gemini"
 
-def retrieve_results(identifier: str, provider: str = "gemini") -> list[dict[str, Any]]:
+
+def _payload_to_text(payload: Any) -> str:
+    if isinstance(payload, (bytes, bytearray)):
+        return payload.decode("utf-8")
+    if hasattr(payload, "text"):
+        return payload.text
+    if hasattr(payload, "read"):
+        data = payload.read()
+        if isinstance(data, (bytes, bytearray)):
+            return data.decode("utf-8")
+        return str(data)
+    return str(payload)
+
+
+def _resolve_raw_output_path(provider: str, identifier: str, explicit_path: str) -> Path:
+    if explicit_path:
+        return Path(explicit_path)
+
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    safe_identifier = identifier.replace("/", "_")
+    return FULL_RESPONSE_DIR / f"{provider}-batch-{safe_identifier}-{timestamp}.jsonl"
+
+
+def _save_raw_jsonl(provider: str, identifier: str, raw_text: str, explicit_path: str) -> Path:
+    path = _resolve_raw_output_path(provider, identifier, explicit_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw_text, encoding="utf-8")
+    logger.info("Saved full raw response JSONL to %s", path)
+    return path
+
+def retrieve_results(
+    identifier: str,
+    provider: str = "gemini",
+    save_full_response: bool = True,
+    full_response_path: str = "",
+) -> list[dict[str, Any]]:
     if provider == "openai":
         
         client = openai.Client()
@@ -30,10 +67,15 @@ def retrieve_results(identifier: str, provider: str = "gemini") -> list[dict[str
             if batch_job.output_file_id:
                 result_file_id = batch_job.output_file_id
                 file_response = client.files.content(result_file_id)
-                file_content_str = file_response.read().decode('utf-8')
+                file_content_str = _payload_to_text(file_response)
+
+                if save_full_response:
+                    _save_raw_jsonl("openai", identifier, file_content_str, full_response_path)
                 
                 json_objects = []
                 for line in file_content_str.splitlines():
+                    if not line.strip():
+                        continue
                     json_objects.append(json.loads(line))
                 
                 with open(OUTPUT_PATH / "batch_results.json", 'w', encoding='utf-8') as f:
@@ -52,11 +94,19 @@ def retrieve_results(identifier: str, provider: str = "gemini") -> list[dict[str
         if batch_job.state.name == 'JOB_STATE_SUCCEEDED':
             if batch_job.dest and batch_job.dest.file_name:
                 result_file_name = batch_job.dest.file_name
-                file_content_bytes = client.files.download(file=result_file_name)
-                file_content_str = file_content_bytes.decode('utf-8')
+                try:
+                    file_content = client.files.download(name=result_file_name)
+                except TypeError:
+                    file_content = client.files.download(file=result_file_name)
+                file_content_str = _payload_to_text(file_content)
+
+                if save_full_response:
+                    _save_raw_jsonl("gemini", identifier, file_content_str, full_response_path)
                 
                 json_objects = []
                 for line in file_content_str.splitlines():
+                    if not line.strip():
+                        continue
                     json_objects.append(json.loads(line))
                 
                 with open(OUTPUT_PATH / "batch_results.json", 'w', encoding='utf-8') as f:
@@ -117,6 +167,18 @@ def main():
     parser = argparse.ArgumentParser(description="Summarize evaluation results")
     parser.add_argument("--provider", type=str, default="openai", choices=["openai", "gemini"], help="LLM provider used")
     parser.add_argument("--batch_identifier", type=str, required=True, help="Batch job identifier to retrieve results")
+    parser.add_argument(
+        "--save_full_response",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Persist the full raw response JSONL in outputs/evaluations/full-responses",
+    )
+    parser.add_argument(
+        "--full_response_path",
+        type=str,
+        default="",
+        help="Optional explicit output path for the saved raw response JSONL",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -133,7 +195,12 @@ def main():
 
     identifier = args.batch_identifier
 
-    matches = retrieve_results(identifier, provider)
+    matches = retrieve_results(
+        identifier,
+        provider,
+        save_full_response=args.save_full_response,
+        full_response_path=args.full_response_path,
+    )
     statistics = process_leaderboard(matches, provider)
     calculate_winrate(statistics)
 

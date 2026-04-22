@@ -4,7 +4,7 @@ export HF_TOKEN=""
 
 SEED=42
 
-num_authors=4
+num_authors=10
 seed_file="/tmp/seed_$SEED"
 
 echo "$SEED" | openssl sha256 -binary > "$seed_file"
@@ -14,12 +14,12 @@ selected_numbers=$(shuf -i 1-50 -n $num_authors --random-source="$seed_file")
 echo "Seed: $SEED"
 echo "Selected indices: $selected_numbers"
 
-benchmark="ccat50"
+benchmark="cmcc"
 
 for num in $selected_numbers; do
     echo "Running experiment for author_key: $num"
     
-    uv run -m scripts.run_ditto configs/ditto-mistral-7b-instruct.yaml \
+    uv run -m examples.run_ditto configs/ditto-mistral-7b-instruct.yaml \
         --train_pkl=benchmarks/${benchmark}/processed/${benchmark}_train.pkl \
         --train_author_key=$num \
         --output_dir=outputs/${benchmark}-mistral-7b-instruct-ditto-key-$num \
@@ -27,8 +27,8 @@ for num in $selected_numbers; do
         --push_to_hub=true \
         --hub_repo_id=mistralai/Mistral-7B-Instruct-v0.2-ditto-key-$num
 
-    uv run -m scripts.generate_samples \
-        -d belati/ccat50 \
+    uv run -m examples.generate_samples \
+        -d belati/${benchmark} \
         -a $num \
         -m mistralai/Mistral-7B-Instruct-v0.2 \
         --model_name mistral-7b
